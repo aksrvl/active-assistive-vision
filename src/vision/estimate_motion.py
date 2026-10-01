@@ -1,56 +1,49 @@
 import cv2 as cv
 import numpy as np
 
+VIDEO_PATH = "./data/raw/sofa_video.MOV"
+CALIBRATION_PATH = "./data/calibration/camera_calibration.npz"
+
 FRAME_STEP = 10
+LOWE_THRESHOLD = 0.75
 
 selected_frames = []
 
-cap = cv.VideoCapture("./data/raw/sofa_video.MOV")
+cap = cv.VideoCapture(VIDEO_PATH)
 
-width = cap.get(cv.CAP_PROP_FRAME_WIDTH)
-height = cap.get(cv.CAP_PROP_FRAME_HEIGHT)
-fps = cap.get(cv.CAP_PROP_FPS)
-
-print(f"Resolution: {width}x{height}, FPS: {fps}")
 frame_count = 0
 
 while cap.isOpened():
     ret, frame = cap.read()
 
     if not ret:
-        print("Can't receive frame")
         break
 
     frame_count += 1
 
-    if frame_count%FRAME_STEP == 0:
+    if frame_count % FRAME_STEP == 0:
         selected_frames.append(frame)
-        #cv.imshow('frame', frame)
-
-    if cv.waitKey(1) == ord('q'):
-        break
-
-print("Total frames: ", frame_count)
-print("Selected frames", len(selected_frames))
 
 cap.release()
 
-test_frame1 = cv.cvtColor(selected_frames[0], cv.COLOR_BGR2GRAY)
-test_frame2 = cv.cvtColor(selected_frames[10], cv.COLOR_BGR2GRAY)
+frame1 = cv.cvtColor(selected_frames[0], cv.COLOR_BGR2GRAY)
+frame2 = cv.cvtColor(selected_frames[5], cv.COLOR_BGR2GRAY)
 
 orb = cv.ORB_create()
-kp1, des1 = orb.detectAndCompute(test_frame1, None)
-kp2, des2 = orb.detectAndCompute(test_frame2, None)
+
+kp1, des1 = orb.detectAndCompute(frame1, None)
+kp2, des2 = orb.detectAndCompute(frame2, None)
+
 
 bf = cv.BFMatcher(cv.NORM_HAMMING)
-matches = bf.knnMatch(des1, des2, k = 2)
+matches = bf.knnMatch(des1, des2, k=2)
 
-threshold = 0.75
 selected_matches = []
 
 for best, second_best in matches:
-    if best.distance < threshold * second_best.distance:
+    if best.distance < LOWE_THRESHOLD * second_best.distance:
         selected_matches.append(best)
+
 
 points1 = []
 points2 = []
@@ -62,40 +55,62 @@ for match in selected_matches:
 points1 = np.array(points1, dtype=np.float32)
 points2 = np.array(points2, dtype=np.float32)
 
-print(points1.shape)
-print(points2.shape)
-print(points1[0], "->", points2[0])
 
-F, mask = cv.findFundamentalMat(points1, points2, 
-                          method=cv.FM_RANSAC, 
-                          ransacReprojThreshold=1.0, 
-                          confidence=0.99)
+calibration = np.load(CALIBRATION_PATH)
 
-print(F)
-print(mask.shape)
-print(np.sum(mask == [1]))
+camera_matrix = calibration["camera_matrix"]
+dist_coeffs = calibration["dist_coeffs"]
 
-inlier_matches = []
-outlier_matches = []
 
-mask = mask.ravel()
+undistorted_points1 = cv.undistortPoints(
+    points1,
+    camera_matrix,
+    dist_coeffs,
+    R=None,
+    P=camera_matrix
+).reshape(-1, 2)
 
-for match, is_inlier in zip(selected_matches, mask):
-    if is_inlier == 1:
-        inlier_matches.append(match)
-    else:
-        outlier_matches.append(match)
+undistorted_points2 = cv.undistortPoints(
+    points2,
+    camera_matrix,
+    dist_coeffs,
+    R=None,
+    P=camera_matrix
+).reshape(-1, 2)
 
-# outcome_frame = cv.drawMatches(test_frame1, kp1, test_frame2, kp2, selected_matches[:30],None, flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-outliers_frame = cv.drawMatches(test_frame1, kp1, test_frame2, kp2, outlier_matches,None, flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-inliers_frame = cv.drawMatches(test_frame1, kp1, test_frame2, kp2, inlier_matches,None, flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
 
-# cv.imshow('outliers matches', outliers_frame)
-cv.imshow('matches', inliers_frame)
+E, essential_mask = cv.findEssentialMat(
+    undistorted_points1,
+    undistorted_points2,
+    camera_matrix,
+    method=cv.RANSAC,
+    prob=0.999,
+    threshold=1.0
+)
 
-cv.waitKey(0)
+essential_inliers = np.count_nonzero(essential_mask)
 
-print("Raw matches:", len(matches))
-print("Good matches:", len(selected_matches))
+pose_inliers, R, t, pose_mask = cv.recoverPose(
+    E,
+    undistorted_points1,
+    undistorted_points2,
+    camera_matrix,
+    mask=essential_mask
+)
 
-cv.destroyAllWindows()
+
+rvec, _ = cv.Rodrigues(R)
+rotation_angle = np.degrees(np.linalg.norm(rvec))
+
+
+print(f"Matches after Lowe filtering: {len(selected_matches)}")
+print(f"Essential matrix inliers: {essential_inliers}")
+print(f"Pose inliers: {pose_inliers}")
+
+print("\nRotation:")
+print(R)
+
+print("\nTranslation direction:")
+print(t.ravel())
+
+print(f"\nRotation angle: {rotation_angle:.2f} degrees")
