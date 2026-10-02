@@ -106,6 +106,11 @@ def estimate_relative_pose(frame1, frame2, camera_matrix, dist_coeffs):
 keyframe_index = 0
 candidate_index = 1
 
+R_global = np.eye(3)
+t_global = np.zeros((3, 1))
+
+camera_positions = [np.zeros(3)]
+
 while candidate_index < len(selected_frames):
     frame1 = selected_frames[keyframe_index]
     frame2 = selected_frames[candidate_index]
@@ -123,7 +128,15 @@ while candidate_index < len(selected_frames):
             f"pose: {pose_inliers}/{essential_inliers} | "
             f"ratio: {pose_inlier_ratio:.2f} | ACCEPT"
         )
+
+        t_global = R @ t_global + t
+        R_global = R @ R_global
+
+        camera_center = -R_global.T @ t_global
+        camera_positions.append(camera_center.flatten())
+
         keyframe_index = candidate_index
+
     else:
         print(
             f"{keyframe_index} -> {candidate_index} | "
@@ -132,4 +145,5 @@ while candidate_index < len(selected_frames):
         )
 
     candidate_index += 1
-    
+
+print(camera_positions)
