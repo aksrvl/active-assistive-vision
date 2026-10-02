@@ -1,5 +1,6 @@
 import cv2 as cv
 import numpy as np
+import matplotlib.pyplot as plt
 
 VIDEO_PATH = "./data/raw/sofa_video.MOV"
 CALIBRATION_PATH = "./data/calibration/camera_calibration.npz"
@@ -147,3 +148,18 @@ while candidate_index < len(selected_frames):
     candidate_index += 1
 
 print(camera_positions)
+
+camera_positions = np.array(camera_positions)
+plt.plot(
+    camera_positions[:, 0],
+    camera_positions[:, 2],
+    marker="o"
+)
+
+plt.xlabel("X (arbitrary scale)")
+plt.ylabel("Z (arbitrary scale)")
+plt.title("Estimated Camera Trajectory (Top View)")
+plt.axis("equal")
+plt.grid()
+
+plt.show()
