@@ -99,13 +99,28 @@ def estimate_relative_pose(frame1, frame2, camera_matrix, dist_coeffs):
         mask=essential_mask
     )
 
+    inlier_mask = pose_mask.ravel() != 0
+
+    inlier_points1 = undistorted_points1[inlier_mask]
+    inlier_points2 = undistorted_points2[inlier_mask]
+
     pose_inlier_ratio = pose_inliers / essential_inliers if essential_inliers != 0 else 0
 
-    return R, t, len(selected_matches), essential_inliers, pose_inliers, pose_inlier_ratio
+    return R, t, len(selected_matches), essential_inliers, pose_inliers, pose_inlier_ratio, inlier_points1, inlier_points2
 
 
 keyframe_index = 0
 candidate_index = 1
+
+reference_frame = selected_frames[0].copy()
+roi = cv.selectROI("Select TRR", reference_frame)
+cv.destroyWindow("Select TRR")
+print(f"Selected TRR: x={roi[0]}, y={roi[1]}, w={roi[2]}, h={roi[3]}")
+
+cv.rectangle(reference_frame, (roi[0], roi[1]), (roi[0]+roi[2], roi[1]+roi[3]), (0,255,0), 3)
+cv.imshow("TRR", reference_frame)
+cv.waitKey(0)
+cv.destroyAllWindows()
 
 R_global = np.eye(3)
 t_global = np.zeros((3, 1))
@@ -116,7 +131,7 @@ while candidate_index < len(selected_frames):
     frame1 = selected_frames[keyframe_index]
     frame2 = selected_frames[candidate_index]
 
-    R, t, matches_count, essential_inliers, pose_inliers, pose_inlier_ratio = estimate_relative_pose(
+    R, t, matches_count, essential_inliers, pose_inliers, pose_inlier_ratio, inlier_points1, inlier_points2 = estimate_relative_pose(
         frame1,
         frame2,
         camera_matrix,
@@ -129,6 +144,30 @@ while candidate_index < len(selected_frames):
             f"pose: {pose_inliers}/{essential_inliers} | "
             f"ratio: {pose_inlier_ratio:.2f} | ACCEPT"
         )
+
+        if(keyframe_index == 0):
+            trr_mask = ((inlier_points1[:, 0] >= roi[0]) & 
+                        (inlier_points1[:,0]<=roi[0]+roi[2]) & 
+                        (inlier_points1[:, 1]>=roi[1]) & 
+                        (inlier_points1[:,1]<=roi[1]+roi[3]))
+          
+            print(trr_mask.shape)
+            
+            trr_points_frame1 = inlier_points1[trr_mask]
+            trr_points_frame2 = inlier_points2[trr_mask]
+
+            frame1_vis = frame1.copy()
+            frame2_vis = frame2.copy()
+
+            for point1, point2 in zip(trr_points_frame1, trr_points_frame2):
+                cv.circle(frame1_vis, (int(point1[0]), int(point1[1])), 5, (0, 255, 0), -1)
+                cv.circle(frame2_vis, (int(point2[0]), int(point2[1])), 5, (0, 255, 0), -1)
+            cv.imshow("Frame 1 vis", frame1_vis)
+            cv.imshow("Frame 2 vis", frame2_vis)
+            cv.waitKey(0)
+            cv.destroyAllWindows()
+
+            print("TRR tracked points:", len(trr_points_frame1))
 
         t_global = R @ t_global + t
         R_global = R @ R_global
@@ -147,8 +186,6 @@ while candidate_index < len(selected_frames):
 
     candidate_index += 1
 
-print(camera_positions)
-
 camera_positions = np.array(camera_positions)
 plt.plot(
     camera_positions[:, 0],
@@ -163,3 +200,4 @@ plt.axis("equal")
 plt.grid()
 
 plt.show()
+
