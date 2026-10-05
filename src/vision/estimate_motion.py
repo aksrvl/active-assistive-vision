@@ -1,6 +1,5 @@
 import cv2 as cv
 import numpy as np
-import matplotlib.pyplot as plt
 
 VIDEO_PATH = "./data/raw/sofa_video.MOV"
 CALIBRATION_PATH = "./data/calibration/camera_calibration.npz"
@@ -9,8 +8,6 @@ FRAME_STEP = 10
 LOWE_THRESHOLD = 0.75
 MIN_POSE_INLIERS = 50
 MIN_POSE_INLIER_RATIO = 0.7
-TRR_GRID_ROWS = 4
-TRR_GRID_COLS = 6
 EXTENT_MARGIN = 40
 
 def estimate_relative_pose(frame1, frame2, camera_matrix, dist_coeffs):
@@ -78,14 +75,9 @@ def estimate_relative_pose(frame1, frame2, camera_matrix, dist_coeffs):
         mask=essential_mask
     )
 
-    inlier_mask = pose_mask.ravel() != 0
-
-    inlier_points1 = undistorted_points1[inlier_mask]
-    inlier_points2 = undistorted_points2[inlier_mask]
-
     pose_inlier_ratio = pose_inliers / essential_inliers if essential_inliers != 0 else 0
 
-    return R, t, len(selected_matches), essential_inliers, pose_inliers, pose_inlier_ratio, inlier_points1, inlier_points2
+    return R, t, pose_inliers, pose_inlier_ratio
 
 def estimate_extent_from_roi(roi, frame_shape):
     x, y, w, h = roi
@@ -107,33 +99,6 @@ def estimate_extent_from_roi(roi, frame_shape):
 
     return extent, distances
 
-def draw_trr_grid(frame, roi):
-    frame_vis = frame.copy()
-    x, y, w, h = roi
-
-    cell_w = w / TRR_GRID_COLS
-    cell_h = h / TRR_GRID_ROWS
-
-    for col in range(1, TRR_GRID_COLS):
-        x_line = x + col * cell_w
-        cv.line(frame_vis, 
-                (int(x_line), y), 
-                (int(x_line), y+h), 
-                (0,255,0), 
-                2)
-
-    for row in range (1, TRR_GRID_ROWS):
-        y_line = y+ row*cell_h
-        cv.line(frame_vis, 
-                (x, int(y_line)), 
-                (x+w, int(y_line)), 
-                (0,255,0), 
-                2)
-    
-    cv.rectangle(frame_vis, (x, y), (x+w, y+h), (0,255,0), 3)
-
-    return frame_vis
-
 def update_extent(global_extent, observation_extent):
     updated_extent = {}
 
@@ -153,12 +118,12 @@ def get_unknown_extent(extent):
 
     return missing
 
-selected_frames = []
+def choose_exploration_target(unknown_extent, distances):
+    return min(unknown_extent, key=lambda side: distances[side])
+        
 
-trr_grid = np.zeros(
-    (TRR_GRID_ROWS, TRR_GRID_COLS),
-    dtype=bool
-)
+
+selected_frames = []
 
 cap = cv.VideoCapture(VIDEO_PATH)
 
@@ -196,19 +161,14 @@ trr_extent, extent_distances = estimate_extent_from_roi(roi, reference_frame.sha
 print("Selected TRR:", roi)
 print("TRR extent:", trr_extent)
 
-trr_vis = draw_trr_grid(reference_frame, roi)
-
-
 R_global = np.eye(3)
 t_global = np.zeros((3, 1))
-
-camera_positions = [np.zeros(3)]
 
 while candidate_index < len(selected_frames):
     frame1 = selected_frames[keyframe_index]
     frame2 = selected_frames[candidate_index]
 
-    R, t, matches_count, essential_inliers, pose_inliers, pose_inlier_ratio, inlier_points1, inlier_points2 = estimate_relative_pose(
+    R, t, pose_inliers, pose_inlier_ratio = estimate_relative_pose(
         frame1,
         frame2,
         camera_matrix,
@@ -217,14 +177,6 @@ while candidate_index < len(selected_frames):
 
     if pose_inliers >= MIN_POSE_INLIERS and pose_inlier_ratio >= MIN_POSE_INLIER_RATIO:
         if(keyframe_index == 0):
-            trr_mask = ((inlier_points1[:, 0] >= roi[0]) & 
-                        (inlier_points1[:,0]<=roi[0]+roi[2]) & 
-                        (inlier_points1[:, 1]>=roi[1]) & 
-                        (inlier_points1[:,1]<=roi[1]+roi[3]))
-            
-            trr_points_frame1 = inlier_points1[trr_mask]
-            trr_points_frame2 = inlier_points2[trr_mask]
-
             new_roi = cv.selectROI("Select TRR in new view", frame2)
             cv.destroyWindow("Select TRR in new view")
             observation_extent, observation_distances = estimate_extent_from_roi(
@@ -248,16 +200,13 @@ while candidate_index < len(selected_frames):
             else:
                 print("NEED_MORE")
                 unknown = get_unknown_extent(trr_extent)
+                target = choose_exploration_target(unknown, observation_distances)
                 print("Missing extent:", unknown)  
+                print("Exploration target:", target)
 
         t_global = R @ t_global + t
         R_global = R @ R_global
 
-        camera_center = -R_global.T @ t_global
-        camera_positions.append(camera_center.flatten())
-
         keyframe_index = candidate_index
 
     candidate_index += 1
-
-camera_positions = np.array(camera_positions)
