@@ -121,6 +121,87 @@ def get_unknown_extent(extent):
 def choose_exploration_target(unknown_extent, distances):
     return min(unknown_extent, key=lambda side: distances[side])
         
+def plan_camera_action(target):
+    camera_action = {}
+
+    if target == "left":
+        camera_action['direction'] = 'left'
+        camera_action['magnitude'] = 'small'
+        camera_action["goal"] = 'reveal_left_boundary'
+        camera_action['hint'] = 'move left'
+
+    elif target == "right":
+        camera_action['direction'] = 'right'
+        camera_action['magnitude'] = 'small'
+        camera_action["goal"] = 'reveal_right_boundary'
+        camera_action['hint'] = 'move right'
+
+    elif target == "top":
+        camera_action['direction'] = 'top'
+        camera_action['magnitude'] = 'small'
+        camera_action["goal"] = 'reveal_top_boundary'
+        camera_action['hint'] = 'raise camera'
+
+    elif target == "bottom":
+        camera_action['direction'] = 'bottom'
+        camera_action['magnitude'] = 'small'
+        camera_action["goal"] = 'reveal_bottom_boundary'
+        camera_action['hint'] = 'lower camera'
+
+    return camera_action
+
+def estimate_camera_motion(R, t):
+    # 1. Camera center displacement
+    camera_displacement = -R.T@t
+
+    dx = camera_displacement[0][0]
+    dy = camera_displacement[1][0]
+    dz = camera_displacement[2][0]
+
+    # 2. Normalized translation direction
+    vector_length = np.sqrt(dx**2 + dy**2 + dz**2)
+    normal_direction = camera_displacement/vector_length
+
+    dx_norm = normal_direction[0][0]
+    dy_norm = normal_direction[1][0]
+    dz_norm = normal_direction[2][0]
+
+    # 3. Dominant translation axis
+    max_direction = np.argmax(np.abs([dx_norm, dy_norm, dz_norm]))
+    directions = {
+        0: ("right", "left"),
+        1: ("down", "up"),
+        2: ("forward", "backward")
+    }
+    direction=None
+    match max_direction:
+        case 0:
+            if dx_norm>0:
+                direction = directions[0][0]
+            else:
+                direction = directions[0][1]
+        case 1:
+            if dy_norm>0:
+                direction = directions[1][0]
+            else:
+                direction = directions[1][1]
+        case 2:
+            if dz_norm>0:
+                direction = directions[2][0]
+            else:
+                direction = directions[2][1]
+
+    # 4. Rotation angle in degrees
+    rotation_vector, _ = cv.Rodrigues(R)
+    rotation_deg = np.linalg.norm(rotation_vector) * 180 / np.pi
+
+    # 5. Return structured motion information
+    return  {
+        "translation_direction": direction,
+        # "dominant_axis": dominant_axis,
+        "normalized_translation": normal_direction.flatten(),
+        "rotation_degrees": rotation_deg
+    }
 
 
 selected_frames = []
@@ -164,6 +245,8 @@ print("TRR extent:", trr_extent)
 R_global = np.eye(3)
 t_global = np.zeros((3, 1))
 
+target = None
+
 while candidate_index < len(selected_frames):
     frame1 = selected_frames[keyframe_index]
     frame2 = selected_frames[candidate_index]
@@ -176,7 +259,10 @@ while candidate_index < len(selected_frames):
     )
 
     if pose_inliers >= MIN_POSE_INLIERS and pose_inlier_ratio >= MIN_POSE_INLIER_RATIO:
-        if(keyframe_index == 0):
+        motion = estimate_camera_motion(R, t)
+        print("Camera motion:", motion)
+
+        if not is_extent_complete(trr_extent):
             new_roi = cv.selectROI("Select TRR in new view", frame2)
             cv.destroyWindow("Select TRR in new view")
             observation_extent, observation_distances = estimate_extent_from_roi(
@@ -200,9 +286,14 @@ while candidate_index < len(selected_frames):
             else:
                 print("NEED_MORE")
                 unknown = get_unknown_extent(trr_extent)
-                target = choose_exploration_target(unknown, observation_distances)
-                print("Missing extent:", unknown)  
+                if target is None or trr_extent[target]:
+                    target = choose_exploration_target(unknown, observation_distances)
+
+                camera_action = plan_camera_action(target)
+
+                print("Missing extent:", unknown)
                 print("Exploration target:", target)
+                print("Camera action:", camera_action)
 
         t_global = R @ t_global + t
         R_global = R @ R_global
