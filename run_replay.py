@@ -12,7 +12,8 @@ from src.spatial.extent import (
 
 from src.agent.planner import (
     choose_exploration_target,
-    plan_camera_action
+    plan_camera_action,
+    evaluate_camera_action
 )
 
 VIDEO_PATH = "./data/raw/sofa_video.MOV"
@@ -65,8 +66,8 @@ print("TRR extent:", trr_extent)
 
 R_global = np.eye(3)
 t_global = np.zeros((3, 1))
-
 target = None
+pending_action = None
 
 while candidate_index < len(selected_frames):
     frame1 = selected_frames[keyframe_index]
@@ -81,7 +82,11 @@ while candidate_index < len(selected_frames):
 
     if pose_inliers >= MIN_POSE_INLIERS and pose_inlier_ratio >= MIN_POSE_INLIER_RATIO:
         motion = estimate_camera_motion(R, t)
+        motion["reliable"] = False
         print("Camera motion:", motion)
+        if pending_action is not None:
+            feedback = evaluate_camera_action(pending_action, motion)
+            print("Action feedback:", feedback)
 
         if not is_extent_complete(trr_extent):
             new_roi = cv.selectROI("Select TRR in new view", frame2)
@@ -92,7 +97,6 @@ while candidate_index < len(selected_frames):
             )
             print("Previous extent:", trr_extent)
             print("Observation extent:", observation_extent)
-            print("Extent distances:", extent_distances)
             print("Observation distances:", observation_distances)
 
             trr_extent = update_extent(
@@ -104,6 +108,7 @@ while candidate_index < len(selected_frames):
 
             if is_extent_complete(trr_extent):
                 print("EXTENT_COMPLETE")   
+                pending_action = None
             else:
                 print("NEED_MORE")
                 unknown = get_unknown_extent(trr_extent)
@@ -111,6 +116,7 @@ while candidate_index < len(selected_frames):
                     target = choose_exploration_target(unknown, observation_distances)
 
                 camera_action = plan_camera_action(target)
+                pending_action = camera_action
 
                 print("Missing extent:", unknown)
                 print("Exploration target:", target)

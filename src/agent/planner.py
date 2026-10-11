@@ -30,4 +30,43 @@ def plan_camera_action(target):
 
     return camera_action
 
+def evaluate_camera_action(camera_action, motion):
+    direction_mapping = {
+        "left": "left",
+        "right": "right",
+        "top": "up",
+        "bottom": "down"
+    }
+    opposites = {
+        "left": "right",
+        "right": "left",
+        "up": "down",
+        "down": "up",
+        "forward": "backward",
+        "backward": "forward"
+    }
+    expected = direction_mapping[camera_action["direction"]]
+    observed = motion["translation_direction"]
+    if not motion["reliable"]:
+        status = "UNCERTAIN"
+        reason = "Camera motion is unreliable"
+
+    elif expected == observed:
+        status = "FOLLOWED"
+        reason = "Camera moved in the requested direction"
+
+    elif observed == opposites[expected]:
+        status = "WRONG_DIRECTION"
+        reason = "Camera moved in the wrong direction"
+
+    else:
+        status = "OFF_AXIS"
+        reason = "Camera moved along a different axis"
+    
+    return {
+        "status": status,
+        "expected": expected,
+        "observed": observed,
+        "reason": reason
+    }
 
