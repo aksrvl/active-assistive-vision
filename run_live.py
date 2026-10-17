@@ -1,18 +1,23 @@
 import cv2 as cv
 import time 
+import os
 
 CAMERA_INDEX = 1
-previous_time = time.perf_counter()
+MOTION_THRESHOLD = 50
+MOTION_PIXEL_THRESHOLD = 0.06
+STABLE_DURATION = 2.0
+
 frame_count = 0
-
+previous_time = time.perf_counter()
 roi = None
-
 previous_roi_gray = None
-motion_threshold = 50
-motion_pixel_threshold = 0.06
 scene_state = "SELECT ROI"
 stable_since = None
-stable_duration = 10.0
+
+evidence_dir = "evidence"
+os.makedirs(evidence_dir, exist_ok=True)
+evidence_count = 0
+snapshot_captured = False
 
 cap = cv.VideoCapture(CAMERA_INDEX, cv.CAP_AVFOUNDATION)
 
@@ -28,24 +33,14 @@ try:
             print("Failed to read frame")
             break
 
-        frame_count += 1
+        evidence_frame = frame.copy()
 
+        frame_count += 1
         height, width = frame.shape[:2]
 
-        cv.putText(
-            frame,
-            f"{width}x{height}",
-            (20, 40),
-            cv.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            2
-        )
         current_time = time.perf_counter()
         delta_time = current_time - previous_time
-
         fps = 1.0 / delta_time if delta_time > 0 else 0.
-
         previous_time = current_time
 
         motion_status = "SELECT ROI"
@@ -53,20 +48,26 @@ try:
         if roi is None:
             scene_state = "SELECT ROI"
             stable_since = None
+            previous_roi_gray = None
 
-        if roi is not None:
+        else:
             x, y, w, h = roi
 
             roi_frame = frame[y:y+h, x:x+w]
             roi_gray = cv.cvtColor(roi_frame, cv.COLOR_BGR2GRAY)
             roi_gray = cv.GaussianBlur(roi_gray, (5, 5), 0)
 
-            if previous_roi_gray is not None:
+            if previous_roi_gray is None:
+                motion_status = "INITIALIZING"
+                scene_state = "OBSERVING"
+                stable_since = None
+
+            else:
                 diff = cv.absdiff(previous_roi_gray, roi_gray)
 
                 _, motion_mask = cv.threshold(
                     diff,
-                    motion_threshold,
+                    MOTION_THRESHOLD,
                     255,
                     cv.THRESH_BINARY
                 )
@@ -74,7 +75,6 @@ try:
                 kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
 
                 motion_mask = cv.morphologyEx(motion_mask, cv.MORPH_OPEN, kernel)
-
                 motion_mask = cv.dilate(motion_mask, kernel, iterations=2)
 
                 changed_pixels = cv.countNonZero(motion_mask)
@@ -92,37 +92,44 @@ try:
 
                     cv.rectangle(frame, (x+mx, y+my), (x+mx+mw, y+my+mh), (0,0,255), 2)
 
-                if motion_ratio > motion_pixel_threshold:
+                if motion_ratio > MOTION_PIXEL_THRESHOLD:
                     motion_status = "MOTION"
                 else:
                     motion_status = "NO MOTION"
 
-                current_time = time.perf_counter()
-
-                if motion_status == "NO MOTION":
+                if motion_status == "MOTION":
+                    stable_since = None
+                    scene_state = "OBSERVING"
+                    snapshot_captured = False
+                else:
                     if stable_since is None:
-                        stable_since = current_time
-                    if current_time - stable_since >= stable_duration:
+                        stable_since = time.perf_counter()
+
+                    elapsed = time.perf_counter() - stable_since
+
+                    if elapsed >= STABLE_DURATION:
                         scene_state = "READY TO ANALYZE"
                     else: 
                         scene_state = "OBSERVING"
-                else:
-                    stable_since = None
-                    scene_state = "OBSERVING"
-
+            
             previous_roi_gray = roi_gray.copy()
 
-        if roi is not None:
-            x, y, w, h = roi
+            if (scene_state == "READY TO ANALYZE" and not snapshot_captured):
+                next_count = evidence_count + 1
 
-            cv.rectangle(
-                frame,
-                (x, y),
-                (x + w, y + h),
-                (0, 255, 0),
-                2
-            )
+                evidence_path = os.path.join(evidence_dir, f"scene_{next_count:03d}.jpg")
+                saved = cv.imwrite(evidence_path, evidence_frame)
 
+                if saved:
+                    evidence_count = next_count
+                    snapshot_captured = True
+                    print(f"Evidence saved: {evidence_path}")
+                else:
+                    print("Failed to save evidence")
+                
+            cv.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            
+        cv.putText(frame, f"{width}x{height}", (20, 40), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv.putText(frame, f"FPS: {fps}", (0, 100), cv.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
         cv.putText(frame, f"Frame: {frame_count}", (0, 130), cv.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
         cv.putText(frame, f"Status: {motion_status}", (0, 160), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0) if motion_status == "NO MOTION" else (0, 0, 255), 2)
@@ -143,6 +150,11 @@ try:
 
             if w > 0 and h > 0:
                 roi = (x, y, w, h)
+                previous_roi_gray = None
+                stable_since = None
+                snapshot_captured = False
+                scene_state = "OBSERVING"
+                
                 print(f"ROI selected: x={x}, y={y}, w={w}, h={h}")
             else:
                 print("ROI selection cancelled")
@@ -150,6 +162,10 @@ try:
         elif key == ord("r"):
             roi = None
             previous_roi_gray = None
+            stable_since = None
+            snapshot_captured = False
+            scene_state = "SELECT ROI"
+            motion_status = "SELECT ROI"
             print("ROI reset")
 
         elif key == ord("q"):
